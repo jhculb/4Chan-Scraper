@@ -11,7 +11,7 @@ from tqdm import tqdm
 class chan4requester():
     def __init__(self, monitor, include_boards = None, exclude_boards = None, request_time_limit = 1, stream_log_level = logging.INFO, logfolderpath = 'logs'):
         self._base_save_path = Path().resolve()
-        self._debuglog = False
+        self._save_debuglog = True
         self._stream_log_level = logging.INFO
         self._setup_logging(logfolderpath)
 
@@ -71,7 +71,7 @@ class chan4requester():
                 prev_threads = json.load(prev_threads_file)
                 for page in prev_threads:
                     for threads in page['threads']:
-                        old_monitor_dict[board][threads['no']] = [threads['last_modified'], threads['replies']]
+                        old_monitor_dict[str(board)][str(threads['no'])] = [int(threads['last_modified']), int(threads['replies'])]
                         old_threads += 1
             self._logger.debug(f'{len} past captures of old threads in previous instances discovered')    
 
@@ -109,6 +109,7 @@ class chan4requester():
             self._update_monitoring_threads()
             self._logger.debug("updating posts on monitoring list")
             self._update_posts_on_monitoring_threadlist()
+            self._logger.debug("Ended loop")
 
     def _update_monitoring_threads(self):
         self._logger.info('Beginning search for threads to monitor')
@@ -118,40 +119,41 @@ class chan4requester():
         update_count = 0
 
         for board in self.monitoring_boards:
+            self._logger.info(f'Searching for threads in {board}')
             threads_json = self.get_and_save_single_board_threadlist(board, with_return=True)
             threads_on_board = {}
 
             for page in threads_json:
                 for thread in page['threads']:
-                    threads_on_board[str(thread['no'])] = [thread['last_modified'], thread['replies']]
+                    threads_on_board[str(thread['no'])] = [int(thread['last_modified']), int(thread['replies'])]
 
             if board in self.monitoring_threads:
-                for thread in self.monitoring_threads[board]:
+                for thread in self.monitoring_threads[str(board)]:
                     if thread in threads_on_board:
                         pass
                     else:
-                        self._logger.debug(f'Thread died {board}/{thread}')
+                        self._logger.debug(f'Thread died: /{board}/{thread}')
                         death_count +=1
                 for thread in threads_on_board:
-                    if thread in self.monitoring_threads[board]:
-                        if self.monitoring_threads[board][thread][0] < threads_on_board[thread][0]:
-                            self._logger.debug(f'Thread updated {board}/{thread}')
-                            self._posts_to_update.append([board, thread])
-                            self.monitoring_threads[board][thread] = threads_on_board[thread]
+                    if thread in self.monitoring_threads[str(board)]:
+                        if self.monitoring_threads[str(board)][str(thread)][0] < threads_on_board[str(thread)][0]:
+                            self._logger.debug(f'Thread updated: /{board}/{thread}')
+                            self._posts_to_update.append([str(board), str(thread)])
+                            self.monitoring_threads[str(board)][str(thread)] = threads_on_board[str(thread)]
                             update_count += 1
                         else:
-                            self._logger.debug(f'Do not need to update thread {board}/{thread}')
+                            self._logger.debug(f'Do not need to update thread /{board}/{thread}')
                     else:
-                        self._logger.debug(f'New thread {board}/{thread}')
-                        self._posts_to_update.append([board, thread])
-                        self.monitoring_threads[board][thread] = threads_on_board[thread]
+                        self._logger.debug(f'New thread: /{board}/{thread}')
+                        self._posts_to_update.append([str(board), str(thread)])
+                        self.monitoring_threads[str(board)][str(thread)] = threads_on_board[str(thread)]
                         birth_count += 1
             else:
-                self._logger.info(f'New Board updated to monitor list {board}')
-                self.monitoring_threads[board] = threads_on_board
+                self._logger.debug(f'New Board: updated to monitor list {board}')
+                self.monitoring_threads[str(board)] = threads_on_board
                 for thread in threads_on_board:
-                    self._logger.debug(f'New thread {board}/{thread}')
-                    self._posts_to_update.append([board, thread])
+                    self._logger.debug(f'New thread: /{board}/{thread}')
+                    self._posts_to_update.append([str(board), str(thread)])
                     birth_count += 1
 
         self._logger.info(f'Thread deaths in previous iteration: {death_count}')
@@ -162,7 +164,11 @@ class chan4requester():
     def _update_posts_on_monitoring_threadlist(self):
         number_posts_in_iteration = len(self._posts_to_update)
         i = 1
-        for board, post in tqdm(self._posts_to_update):
+        prev_board = ''
+        for board, post in self._posts_to_update:
+            if prev_board != board:
+                self._logger.info(f'Updating posts in {board}')
+                prev_board = board
             start_time = time.time()
             self.get_and_save_thread(board, post)
             current_time_diff = (time.time() - start_time) * (number_posts_in_iteration - i)
@@ -201,20 +207,34 @@ class chan4requester():
 
     def get_chan_info_json(self):
         self._check_time_and_wait()
-        r_boards = requests.get('http://a.4cdn.org/boards.json')
         self._logger.debug('chan information requested')
-        return json.loads(r_boards.text)
+        r_boards = requests.get('http://a.4cdn.org/boards.json')
+        return r_boards.json()
 
     def get_single_board_threadlist(self, board_code):
         self._check_time_and_wait()
+        self._logger.debug(f'Board /{board_code}/ thread information requested')
         r_thread_list = requests.get('https://a.4cdn.org/' + board_code + '/threads.json')
-        self._logger.debug(f'Board {board_code} thread information requested')
-        return json.loads(r_thread_list.text)
+        return r_thread_list.json()
 
     def get_thread(self, board_code, op_ID):
         self._check_time_and_wait()
         r_thread = requests.get('https://a.4cdn.org/' + board_code + '/thread/' + str(op_ID) +'.json')
-        return json.loads(r_thread.text)
+        countdown = 1
+        while r_thread.status_code != 200:
+            if r_thread.status_code == 404:
+                self._logger.error(f'Request for thread {op_ID} on board {board_code} was unsuccessful with error code {r_thread.status_code}, skipping')
+                return None
+            elif countdown < 6:
+                self._logger.error(f'Request for thread {op_ID} on board {board_code} was unsuccessful with error code {r_thread.status_code}, trying {countdown} more times')
+            else:
+                return None
+            time.sleep(self._request_time_limit * 5)
+            r_thread = requests.get('https://a.4cdn.org/' + board_code + '/thread/' + str(op_ID) +'.json')
+            countdown += 1
+        self._logger.debug('Recieved answer')
+        time.sleep(self._request_time_limit)
+        return r_thread.json()
 
     def get_and_save_chan_info(self, outpath=None, filename=None):
         timestamp = self._get_day()
@@ -235,7 +255,7 @@ class chan4requester():
         outpath.mkdir(parents=True, exist_ok=True)
         threadlist = self.get_single_board_threadlist(board_code)
         for threads in outpath.iterdir():
-            if threads.name.split("_")[0] == board_code:
+            if threads.name.split("_")[0] == str(board_code):
                 threads.unlink()
         with open(outpath / filename, 'w') as outfile:
             json.dump(threadlist, outfile, indent=2)
@@ -253,12 +273,21 @@ class chan4requester():
         fullname = outpath / filename
         new_thread = True
         for threads in outpath.iterdir():
-            if threads.name.split("_")[0] == str(op_ID):
+            if int(threads.name.split("_")[0]) == int(op_ID):
                 with open(threads, 'r+') as outfile:
-                    data = json.load(outfile)
+                    try:
+                        data = json.load(outfile)
+                    except json.decoder.JSONDecodeError as error:
+                        self._logger.error(f'''Error: {error},
+                                           outfile = {outfile},
+                                           board = {board_code},
+                                           op_ID = {op_ID}
+                                           ''')
+                        raise SystemExit('Incorrect JSON')
+                        
                     data.update(self.get_thread(board_code, op_ID))
                     outfile.seek(0)
-                    json.dump(data, outfile)
+                    json.dump(data, outfile, indent=2)
                 new_thread = False
         if new_thread is True:
             with open(fullname, 'w') as outfile:
@@ -286,7 +315,7 @@ class chan4requester():
         self._infologfile.setFormatter(self._log_formatter)
         self._logger.addHandler(self._infologfile)
 
-        if self._debuglog:
+        if self._save_debuglog:
             self._debuglogpath = logfolder / ('debug_log' + self._get_full_time() + '.log')
             self._debuglogfile = logging.FileHandler(self._debuglogpath)
             self._debuglogfile.setLevel(logging.DEBUG)
