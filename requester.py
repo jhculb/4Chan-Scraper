@@ -7,7 +7,10 @@ import logging
 import threading
 
 class chan4requester():
-    def __init__(self, monitor, include_boards = None, exclude_boards = None, request_time_limit = 1, stream_log_level = logging.INFO, logfolderpath = 'logs'):
+    def __init__(self, monitor, include_boards = None, exclude_boards = None, request_time_limit = 1.5, stream_log_level = logging.INFO, logfolderpath = 'logs'):
+        self._base_save_path = Path().resolve()
+        self.debuglog = False
+        self._stream_log_level = logging.DEBUG
         self._setup_logging(logfolderpath)
 
         self.monitor = monitor
@@ -38,6 +41,26 @@ class chan4requester():
         self._monitor_thread.join()
         self._logger.info("Closed monitoring thread")
 
+    def _load_old_monitors(self):
+        self._update_monitoring_boards()
+        self._logger.debug('Checking for past captures of old threads in previous instances')
+        old_monitor_dict = {}
+        old_threads = 0
+        for board in self.monitoring_boards:
+            old_monitor_dict[board] = {}
+            timestamp = self._get_day()
+            outpath = self._base_save_path / 'saves' / timestamp / 'threads' / board
+            outpath.mkdir(parents=True, exist_ok=True)
+            old_monitors = []
+            for previous_thread_files in outpath.iterdir():
+                old_monitors.append(previous_thread_files.name.split("_")[0])
+            old_monitors = list(set(old_monitors))
+            for monitor in old_monitors:
+                old_monitor_dict[board][monitor] = [0,0]
+            old_threads += len(old_monitors)
+        self.monitoring_threads = old_monitor_dict
+        self._logger.debug(f'{old_threads} past captures of old threads in previous instances discovered')
+
     def set_include_exclude_boards(self, include_boards=False, exclude_boards=False):
         self._logger.info('Updating boards to monitor')
         self._include_boards = include_boards
@@ -59,7 +82,8 @@ class chan4requester():
 
     def _begin_monitoring(self):
         self._logger.debug("_begin_monitoring entered")
-        self._logger.debug("Initial Threads gathered ")
+        self._load_old_monitors()
+        self._logger.debug("Old monitors retrieved")
         while self.monitor is True:
             self._logger.debug("Started loop")
             if self._check_new_boards:
@@ -70,61 +94,76 @@ class chan4requester():
             self._update_posts_on_monitoring_threadlist()
 
     def _update_monitoring_threads(self):
-        self._logger.debug('begin search for threads to monitor')
+        self._logger.info('Beginning search for threads to monitor')
         self._posts_to_update = []
+        death_count = 0
+        birth_count = 0
+        update_count = 0
+
         for board in self.monitoring_boards:
-            threads_json = self.get_single_board_threadlist(board)
+            threads_json = self.get_and_save_single_board_threadlist(board, with_return=True)
             threads_on_board = {}
 
             for page in threads_json:
                 for thread in page['threads']:
-                    threads_on_board[thread['no']] = [thread['last_modified'], thread['replies']]
+                    threads_on_board[str(thread['no'])] = [thread['last_modified'], thread['replies']]
 
             if board in self.monitoring_threads:
-                # Prune
                 for thread in self.monitoring_threads[board]:
-                    if thread not in threads_on_board:
-                        self._logger.info(f'Thread died {board}/{thread}')
-                # Add
+                    if thread in threads_on_board:
+                        pass
+                    else:
+                        self._logger.debug(f'Thread died {board}/{thread}')
+                        death_count +=1
                 for thread in threads_on_board:
-                    print(thread)
                     if thread in self.monitoring_threads[board]:
                         if self.monitoring_threads[board][thread][0] < threads_on_board[thread][0]:
-                            self._logger.info(f'Thread updated {board}/{thread}')
+                            self._logger.debug(f'Thread updated {board}/{thread}')
                             self._posts_to_update.append([board, thread])
                             self.monitoring_threads[board][thread] = threads_on_board[thread]
+                            update_count += 1
                         else:
                             self._logger.debug(f'Do not need to update thread {board}/{thread}')
                     else:
-                        self._logger.info(f'New thread {board}/{thread}')
+                        self._logger.debug(f'New thread {board}/{thread}')
                         self._posts_to_update.append([board, thread])
                         self.monitoring_threads[board][thread] = threads_on_board[thread]
+                        birth_count += 1
             else:
                 self._logger.info(f'New Board updated to monitor list {board}')
                 self.monitoring_threads[board] = threads_on_board
                 for thread in threads_on_board:
-                    self._logger.info(f'New thread {board}/{thread}')
+                    self._logger.debug(f'New thread {board}/{thread}')
                     self._posts_to_update.append([board, thread])
+                    birth_count += 1
 
-        self._logger.debug(f'{len(self._posts_to_update)} threads found to monitor.')
+        self._logger.info(f'Thread deaths in previous iteration: {death_count}')
+        self._logger.info(f'Thread births in previous iteration: {birth_count}')
+        self._logger.info(f'Thread updates in previous iteration: {update_count}')
+        self._logger.info(f'{len(self._posts_to_update)} threads found to monitor.')
 
     def _update_posts_on_monitoring_threadlist(self):
+        number_posts_in_iteration = len(self._posts_to_update)
+        i = 1
         for board, post in self._posts_to_update:
-            self._logger.info(f'Capturing post {post} in {board}')
-            self.get_and_save_thread(board,post)
+            start_time = time.time()
+            self.get_and_save_thread(board, post)
+            current_time_diff = (time.time() - start_time) * (number_posts_in_iteration - i)
+            self._logger.info(f'{i}/{number_posts_in_iteration}: Capturing post {post} in {board} approximate seconds remaining in iteration {current_time_diff:n}')
+            i += 1
 
     def _set_board_list(self):
         boards_info = self.get_chan_info_json()
         codes = [board['board'] for board in boards_info['boards']]
         return codes
 
-    def _get_precise_time(self):
+    def _get_time(self):
         now = datetime.datetime.today()
-        return now.strftime('_%M_%S')
+        return now.strftime('_%H_%M_%S')
 
-    def _get_hour(self):
+    def _get_day(self):
         now = datetime.datetime.today()
-        return now.strftime('%Y_%m_%d_%H')
+        return now.strftime('%Y_%m_%d')
 
     def _get_full_time(self):
         now = datetime.datetime.today()
@@ -161,68 +200,80 @@ class chan4requester():
         return json.loads(r_thread.text)
 
     def get_and_save_chan_info(self, outpath=None, filename=None):
-        timestamp = self._get_hour()
+        timestamp = self._get_day()
         if outpath is None:
-            outpath = Path().resolve() / 'saves' / timestamp
+            outpath = self._base_save_path / 'saves' / timestamp
         if filename is None:
             filename = 'boards.json'
         outpath.mkdir(parents=True, exist_ok=True)
         with open(outpath / filename, 'w') as outfile:
             json.dump(self.get_chan_info_json(), outfile)
 
-    def get_and_save_board_threadlist(self, board_code, outpath=None, filename=None):
-        timestamp = self._get_hour()
+    def get_and_save_single_board_threadlist(self, board_code, outpath=None, filename=None, with_return=False):
+        timestamp = self._get_day()
         if outpath is None:
-            outpath = Path().resolve() / 'saves' / timestamp / 'threads_on_boards'
+            outpath = self._base_save_path / 'saves' / timestamp / 'threads_on_boards'
         if filename is None:
-            filename = board_code + self._get_precise_time() + '.json'
+            filename = board_code + self._get_time() + '.json'
         outpath.mkdir(parents=True, exist_ok=True)
+        threadlist = self.get_single_board_threadlist(board_code)
+        for threads in outpath.iterdir():
+            if threads.name.split("_")[0] == board_code:
+                threads.unlink()
         with open(outpath / filename, 'w') as outfile:
-            json.dump(self.get_single_board_threadlist(board_code), outfile, indent=2)
+            json.dump(threadlist, outfile, indent=2)
+        if with_return:
+            return threadlist
 
     def get_and_save_thread(self, board_code, op_ID, outpath=None, filename=None):
-        timestamp = self._get_hour()
+        timestamp = self._get_day()
         if outpath is None:
-            outpath = Path().resolve() / 'saves' / timestamp / 'threads' / board_code
-        if filename is None:
-            filename = str(op_ID) + self._get_precise_time() + '.json'
+            outpath = self._base_save_path / 'saves' / timestamp / 'threads' / board_code
         outpath.mkdir(parents=True, exist_ok=True)
-        with open(outpath / filename, 'w') as outfile:
+
+        if filename is None:
+            filename = str(op_ID) + self._get_time() + '.json'
+        fullname = outpath / filename
+        for threads in outpath.iterdir():
+            if threads.name.split("_")[0] == str(op_ID):
+                threads.unlink()
+        with open(fullname, 'w') as outfile:
             json.dump(self.get_thread(board_code, op_ID), outfile, indent=2)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._logger.info("__exit__ called")
 
     def _setup_logging(self, logfolderpath):
-        logfolder = Path('.').resolve() / logfolderpath
+        logfolder = self._base_save_path / logfolderpath
         logfolder.mkdir(parents=True, exist_ok=True)
 
         self._logger = logging.getLogger('4chan_requester')
         self._logger.setLevel(logging.DEBUG)
-        self._debuglogpath = logfolder / ('debug_log' + self._get_full_time() + '.log')
-        self._debuglogfile = logging.FileHandler(self._debuglogpath)
-        self._debuglogfile.setLevel(logging.DEBUG)
+        self._log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s: %(threadName)s - %(message)s')
+
+        self._streamlogs = logging.StreamHandler()
+        self._streamlogs.setLevel(self._stream_log_level)
+        self._streamlogs.setFormatter(self._log_formatter)
+        self._logger.addHandler(self._streamlogs)
 
         self._infologpath = logfolder / ('info_log' + self._get_full_time() + '.log')
         self._infologfile = logging.FileHandler(self._infologpath)
         self._infologfile.setLevel(logging.INFO)
-
-        self._streamlogs = logging.StreamHandler()
-        self._streamlogs.setLevel(logging.DEBUG)
-
-        self._log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s: %(threadName)s - %(message)s')
-        self._debuglogfile.setFormatter(self._log_formatter)
         self._infologfile.setFormatter(self._log_formatter)
-        self._streamlogs.setFormatter(self._log_formatter)
-
-        self._logger.addHandler(self._debuglogfile)
         self._logger.addHandler(self._infologfile)
-        self._logger.addHandler(self._streamlogs)
+
+        if self.debuglog:
+            self._debuglogpath = logfolder / ('debug_log' + self._get_full_time() + '.log')
+            self._debuglogfile = logging.FileHandler(self._debuglogpath)
+            self._debuglogfile.setLevel(logging.DEBUG)
+            self._debuglogfile.setFormatter(self._log_formatter)
+            self._logger.addHandler(self._debuglogfile)
+
         self._logger.debug("Logger Initalised")
 
 # requester_instance = chan4requester(False)
 # requester_instance.get_and_save_chan_info()
-# requester_instance.get_and_save_board_threadlist('r')
+# requester_instance.get_and_save_single_board_threadlist('r')
 # requester_instance.get_and_save_thread('r','17781240')
 
 requester_instance = chan4requester(True, include_boards=['r'])
