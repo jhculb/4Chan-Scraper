@@ -6,11 +6,13 @@ import time
 import logging
 import threading
 
+import tqdm
+
 class chan4requester():
-    def __init__(self, monitor, include_boards = None, exclude_boards = None, request_time_limit = 1.5, stream_log_level = logging.INFO, logfolderpath = 'logs'):
+    def __init__(self, monitor, include_boards = None, exclude_boards = None, request_time_limit = 1, stream_log_level = logging.INFO, logfolderpath = 'logs'):
         self._base_save_path = Path().resolve()
         self.debuglog = False
-        self._stream_log_level = logging.DEBUG
+        self._stream_log_level = logging.INFO
         self._setup_logging(logfolderpath)
 
         self.monitor = monitor
@@ -149,7 +151,7 @@ class chan4requester():
             start_time = time.time()
             self.get_and_save_thread(board, post)
             current_time_diff = (time.time() - start_time) * (number_posts_in_iteration - i)
-            self._logger.info(f'{i}/{number_posts_in_iteration}: Capturing post {post} in {board} approximate seconds remaining in iteration {current_time_diff:n}')
+            self._logger.info(f'{i}/{number_posts_in_iteration}: Capturing post {post} in /{board}/ approximate seconds remaining in iteration {current_time_diff:n}')
             i += 1
 
     def _set_board_list(self):
@@ -234,11 +236,18 @@ class chan4requester():
         if filename is None:
             filename = str(op_ID) + self._get_time() + '.json'
         fullname = outpath / filename
+        new_thread = True
         for threads in outpath.iterdir():
             if threads.name.split("_")[0] == str(op_ID):
-                threads.unlink()
-        with open(fullname, 'w') as outfile:
-            json.dump(self.get_thread(board_code, op_ID), outfile, indent=2)
+                with open(threads, 'r+') as outfile:
+                    data = json.load(outfile)
+                    data.update(self.get_thread(board_code, op_ID))
+                    outfile.seek(0)
+                    json.dump(data, outfile)
+                new_thread = False
+        if new_thread is True:
+            with open(fullname, 'w') as outfile:
+                json.dump(self.get_thread(board_code, op_ID), outfile, indent=2)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._logger.info("__exit__ called")
@@ -276,4 +285,4 @@ class chan4requester():
 # requester_instance.get_and_save_single_board_threadlist('r')
 # requester_instance.get_and_save_thread('r','17781240')
 
-requester_instance = chan4requester(True, include_boards=['r'])
+requester_instance = chan4requester(True)
