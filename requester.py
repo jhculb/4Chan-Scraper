@@ -5,6 +5,8 @@ import logging
 import threading
 from pathlib import Path
 
+from os import stat
+
 import requests
 from tqdm import tqdm
 
@@ -118,42 +120,44 @@ class chan4requester():
         birth_count = 0
         update_count = 0
 
+        # TODO: Check the comprehension here, I seem to be missing tons of threads
         for board in self.monitoring_boards:
             self._logger.info(f'Searching for threads in {board}')
+
             threads_json = self.get_and_save_single_board_threadlist(board, with_return=True)
             threads_on_board = {}
-
             for page in threads_json:
                 for thread in page['threads']:
                     threads_on_board[str(thread['no'])] = [int(thread['last_modified']), int(thread['replies'])]
 
             if board in self.monitoring_threads:
-                for thread in self.monitoring_threads[str(board)]:
+                for thread in self.monitoring_threads[board]:
                     if thread in threads_on_board:
                         pass
                     else:
                         self._logger.debug(f'Thread died: /{board}/{thread}')
                         death_count +=1
+
                 for thread in threads_on_board:
-                    if thread in self.monitoring_threads[str(board)]:
-                        if self.monitoring_threads[str(board)][str(thread)][0] < threads_on_board[str(thread)][0]:
+                    if thread in self.monitoring_threads[board]:
+                        if self.monitoring_threads[board][thread][0] < threads_on_board[thread][0]:
                             self._logger.debug(f'Thread updated: /{board}/{thread}')
-                            self._posts_to_update.append([str(board), str(thread)])
-                            self.monitoring_threads[str(board)][str(thread)] = threads_on_board[str(thread)]
+                            self.monitoring_threads[board][thread] = threads_on_board[thread]
+                            self._posts_to_update.append([board, thread])
                             update_count += 1
                         else:
                             self._logger.debug(f'Do not need to update thread /{board}/{thread}')
                     else:
                         self._logger.debug(f'New thread: /{board}/{thread}')
-                        self._posts_to_update.append([str(board), str(thread)])
-                        self.monitoring_threads[str(board)][str(thread)] = threads_on_board[str(thread)]
+                        self.monitoring_threads[board][thread] = threads_on_board[thread]
+                        self._posts_to_update.append([board, thread])
                         birth_count += 1
             else:
                 self._logger.debug(f'New Board: updated to monitor list {board}')
-                self.monitoring_threads[str(board)] = threads_on_board
+                self.monitoring_threads[board] = threads_on_board
                 for thread in threads_on_board:
                     self._logger.debug(f'New thread: /{board}/{thread}')
-                    self._posts_to_update.append([str(board), str(thread)])
+                    self._posts_to_update.append([board, thread])
                     birth_count += 1
 
         self._logger.info(f'Thread deaths in previous iteration: {death_count}')
@@ -223,11 +227,12 @@ class chan4requester():
         countdown = 1
         while r_thread.status_code != 200:
             if r_thread.status_code == 404:
-                self._logger.error(f'Request for thread {op_ID} on board {board_code} was unsuccessful with error code {r_thread.status_code}, skipping')
+                self._logger.warning(f'Request for thread {op_ID} on board /{board_code}/ was unsuccessful with error code {r_thread.status_code}, skipping')
                 return None
             elif countdown < 6:
-                self._logger.error(f'Request for thread {op_ID} on board {board_code} was unsuccessful with error code {r_thread.status_code}, trying {countdown} more times')
+                self._logger.error(f'Request for thread {op_ID} on board /{board_code}/ was unsuccessful with error code {r_thread.status_code}, trying {countdown} more times')
             else:
+                self._logger.warning(f'Request for thread {op_ID} on board /{board_code}/ was unsuccessful with error code {r_thread.status_code}, returning None')
                 return None
             time.sleep(self._request_time_limit * 5)
             r_thread = requests.get('https://a.4cdn.org/' + board_code + '/thread/' + str(op_ID) +'.json')
@@ -277,18 +282,19 @@ class chan4requester():
                 with open(threads, 'r+') as outfile:
                     try:
                         data = json.load(outfile)
-                    except json.decoder.JSONDecodeError as error:
-                        self._logger.error(f'''Error: {error},
-                                           outfile = {outfile},
-                                           board = {board_code},
-                                           op_ID = {op_ID}
-                                           ''')
-                        raise SystemExit('Incorrect JSON')
-                        
-                    data.update(self.get_thread(board_code, op_ID))
-                    outfile.seek(0)
-                    json.dump(data, outfile, indent=2)
-                new_thread = False
+                    except json.decoder.JSONDecodeError as jerror:
+                        self._logger.warning(f'Loading JSON file {threads} caused error {jerror}, continuing to writing new file rather than append. Board {board_code}, post {op_ID}')
+                        continue
+                    else:
+                        to_update = self.get_thread(board_code, op_ID)
+                        if type(to_update) == type(None):
+                            self._logger.warning(f'Likely 404 caused no return for, skipping | board {board_code}, post {op_ID}')
+                            new_thread = False
+                            continue
+                        data.update(to_update)
+                        outfile.seek(0)
+                        json.dump(data, outfile, indent=2)
+                        new_thread = False
         if new_thread is True:
             with open(fullname, 'w') as outfile:
                 json.dump(self.get_thread(board_code, op_ID), outfile, indent=2)
