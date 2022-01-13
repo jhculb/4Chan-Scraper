@@ -332,9 +332,10 @@ class chan4requester():
 
         self._logger.debug("Logger Initalised")
 
+if __name__ == "__main__":
+    requester_instance = chan4requester(True)
+
 # requester_instance = chan4requester(False)
 # requester_instance.get_and_save_chan_info()
 # requester_instance.get_and_save_single_board_threadlist('r')
 # requester_instance.get_and_save_thread('r','17781240')
-
-requester_instance = chan4requester(True)
