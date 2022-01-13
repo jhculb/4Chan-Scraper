@@ -1,6 +1,6 @@
 # 4Chan Scraper
 ## Author
-Jack Culbert
+J. Culbert
 
 ## Purpose
 Coding challenge over a weekend to implement an application which interfaces with an api for scraping and monitoring purposes.
