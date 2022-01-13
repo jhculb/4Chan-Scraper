@@ -15,4 +15,15 @@ Run requester.py. (v2 requester.py functional and with the most functionality)
 Other functionality includes logging:
 * Debug: Very verbose all actions captured. This includes each polling action. Can be disabled through changing setting in \_\_init\_\_ of the class.
 
+## TODO
+* Parametrise polling rate & other default parameters
+* Dockerise
+* Define desired AWS infrastructure for polling
+    * Implement infrastructure in terraform
+* Setup.py & requirements fully captured (poetry?)
+* CI/CD
+    * Jenkins hosted on AWS
+    * Code quality: Sonarqube / flake8, pylint, isort, black
+    * Pytest unit tests
+    * System tests - create stub for 4chan to mock HTTP response
 
