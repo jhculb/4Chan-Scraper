@@ -10,6 +10,8 @@ from os import stat
 import requests
 from tqdm import tqdm
 
+# TODO: Run each thread concurrently with a round robin on the orginiser. 
+
 class chan4requester():
     def __init__(self, monitor, include_boards = None, exclude_boards = None, request_time_limit = 1, stream_log_level = logging.INFO, logfolderpath = 'logs'):
         self._base_save_path = Path().resolve()
