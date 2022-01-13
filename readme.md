@@ -13,9 +13,9 @@ Coding challenge over a weekend to implement an application which interfaces wit
 Run requester.py. (v2 requester.py functional and with the most functionality)
 
 Other functionality includes logging:
-* Debug: Very verbose all actions captured. This includes each polling action. Can be disabled through changing setting in \_\_init\_\_ of the class.
+* Debug: _Very_ verbose, all actions captured. This includes each polling action. Can be disabled through changing setting in \_\_init\_\_ of the class.
 
-## TODO
+## To do:
 * Parametrise polling rate & other default parameters
 * Dockerise
 * Define desired AWS infrastructure for polling
